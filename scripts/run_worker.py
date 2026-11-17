@@ -29,11 +29,15 @@ def write_rclone_conf(tmp_dir: str) -> str:
             kf.write(base64.b64decode(key_b64))
         os.chmod(key_path, 0o600)
         lines = []
+        replaced = False
         for line in raw.splitlines():
             if line.strip().startswith("key_file"):
                 lines.append(f"key_file = {key_path}")
+                replaced = True
             else:
                 lines.append(line)
+        if not replaced:
+            lines.append(f"key_file = {key_path}")
         raw = "\n".join(lines)
 
     conf_path = os.path.join(tmp_dir, "rclone.conf")
