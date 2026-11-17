@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import configparser
 import json
 import os
 import shutil
@@ -82,68 +83,130 @@ def extract_archives(raw_dir: str, out_dir: str, quiet: bool, password: str = ""
     return extracted
 
 
+def add_dynamic_drive_remote(
+    rclone_conf: str,
+    root_id: str,
+    template_remote: str = "",
+    remote_name: str = "dyn_src",
+) -> str:
+    if not rclone_conf or not os.path.exists(rclone_conf):
+        raise RuntimeError("RCLONE_CONF required for root_id source")
+
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.optionxform = str
+    cp.read(rclone_conf, encoding="utf-8")
+
+    src_sec = template_remote.strip()
+    if not src_sec:
+        for sec in cp.sections():
+            if cp.get(sec, "type", fallback="").strip() == "drive":
+                src_sec = sec
+                break
+    if not src_sec or not cp.has_section(src_sec):
+        raise RuntimeError("No template drive remote found in RCLONE_CONF")
+
+    if cp.has_section(remote_name):
+        cp.remove_section(remote_name)
+    cp.add_section(remote_name)
+    for k, v in cp.items(src_sec):
+        if k in ("root_folder_id", "team_drive"):
+            continue
+        cp.set(remote_name, k, v)
+    cp.set(remote_name, "team_drive", "")
+    cp.set(remote_name, "root_folder_id", root_id.strip())
+
+    with open(rclone_conf, "w", encoding="utf-8") as f:
+        cp.write(f)
+    os.chmod(rclone_conf, 0o600)
+    return f"{remote_name}:"
+
+
 def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, quiet: bool) -> None:
     job_id = job.get("id", "unknown")
-    src = job["source"]
     extract = bool(job.get("extract", False))
     password = str(job.get("password") or os.environ.get("ARCHIVE_PASSWORD", "")).strip()
     targets = job.get("targets", [])
+    template_remote = str(job.get("template_remote", "")).strip()
+
+    sources: list[str] = []
+    if job.get("root_ids"):
+        sources = [f"root_id:{rid}" for rid in job["root_ids"] if str(rid).strip()]
+    elif job.get("root_id"):
+        sources = [f"root_id:{str(job['root_id']).strip()}"]
+    elif job.get("source"):
+        sources = [str(job["source"]).strip()]
+    else:
+        raise ValueError(f"Job {job_id} needs source, root_id, or root_ids")
 
     if dry_run:
-        log(f"[DRY-RUN] Job {job_id}: transfer -> {len(targets)} target(s)", quiet)
+        log(f"[DRY-RUN] Job {job_id}: transfer ({len(sources)} source(s)) -> {len(targets)} target(s)", quiet)
         return
 
-    job_dir = os.path.join(work_dir, job_id)
-    raw_dir = os.path.join(job_dir, "raw")
-    out_dir = os.path.join(job_dir, "out")
-    os.makedirs(raw_dir, exist_ok=True)
-    os.makedirs(out_dir, exist_ok=True)
+    total_files = 0
+    for s_idx, src_spec in enumerate(sources, start=1):
+        job_dir = os.path.join(work_dir, f"{job_id}_{s_idx}")
+        raw_dir = os.path.join(job_dir, "raw")
+        out_dir = os.path.join(job_dir, "out")
+        os.makedirs(raw_dir, exist_ok=True)
+        os.makedirs(out_dir, exist_ok=True)
 
-    try:
-        if src.startswith(("http://", "https://")):
-            fname = src.split("?")[0].rstrip("/").split("/")[-1] or "payload.bin"
-            run_cmd(["curl", "-fsSL", "--retry", "3", "-o", os.path.join(raw_dir, fname), src], quiet)
-        else:
-            cmd = ["rclone", "copy", src, raw_dir, "--transfers", "8"]
-            if rclone_conf:
-                cmd.extend(["--config", rclone_conf])
-            run_cmd(cmd, quiet)
+        try:
+            if src_spec.startswith("root_id:"):
+                rid = src_spec.split(":", 1)[1]
+                src = add_dynamic_drive_remote(
+                    rclone_conf,
+                    root_id=rid,
+                    template_remote=template_remote,
+                    remote_name=f"dyn_{job_id}_{s_idx}",
+                )
+            else:
+                src = src_spec
 
-        files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
-            os.path.join(r, fn) for r, _, fs in os.walk(raw_dir) for fn in sorted(fs)
-        ]
-
-        for target in targets:
-            kind = target.get("kind")
-            if kind == "rclone":
-                cmd = ["rclone", "copy", out_dir if extract else raw_dir, target["dest"], "--transfers", "8"]
+            if src.startswith(("http://", "https://")):
+                fname = src.split("?")[0].rstrip("/").split("/")[-1] or "payload.bin"
+                run_cmd(["curl", "-fsSL", "--retry", "3", "-o", os.path.join(raw_dir, fname), src], quiet)
+            else:
+                cmd = ["rclone", "copy", src, raw_dir, "--transfers", "8"]
                 if rclone_conf:
                     cmd.extend(["--config", rclone_conf])
                 run_cmd(cmd, quiet)
-            elif kind == "hf":
-                token = os.environ.get("HF_TOKEN", "").strip()
-                if not token:
-                    raise RuntimeError("HF_TOKEN missing for hf target")
-                from huggingface_hub import HfApi
 
-                api = HfApi(token=token)
-                repo_id = target["repo_id"]
-                repo_type = target.get("repo_type", "model")
-                dest_dir = target.get("dest_dir", "").strip("/")
-                base_root = out_dir if extract else raw_dir
-                for fpath in files:
-                    rel = os.path.relpath(fpath, base_root).replace(os.sep, "/")
-                    path_in_repo = f"{dest_dir}/{rel}" if dest_dir else rel
-                    api.upload_file(
-                        path_or_fileobj=fpath,
-                        path_in_repo=path_in_repo,
-                        repo_id=repo_id,
-                        repo_type=repo_type,
-                        commit_message="Upload asset",
-                    )
-        log(f"[OK] Job {job_id} finished ({len(files)} file(s))", quiet)
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
+            files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
+                os.path.join(r, fn) for r, _, fs in os.walk(raw_dir) for fn in sorted(fs)
+            ]
+
+            for target in targets:
+                kind = target.get("kind")
+                if kind == "rclone":
+                    cmd = ["rclone", "copy", out_dir if extract else raw_dir, target["dest"], "--transfers", "8"]
+                    if rclone_conf:
+                        cmd.extend(["--config", rclone_conf])
+                    run_cmd(cmd, quiet)
+                elif kind == "hf":
+                    token = os.environ.get("HF_TOKEN", "").strip()
+                    if not token:
+                        raise RuntimeError("HF_TOKEN missing for hf target")
+                    from huggingface_hub import HfApi
+
+                    api = HfApi(token=token)
+                    repo_id = target["repo_id"]
+                    repo_type = target.get("repo_type", "model")
+                    dest_dir = target.get("dest_dir", "").strip("/")
+                    base_root = out_dir if extract else raw_dir
+                    for fpath in files:
+                        rel = os.path.relpath(fpath, base_root).replace(os.sep, "/")
+                        path_in_repo = f"{dest_dir}/{rel}" if dest_dir else rel
+                        api.upload_file(
+                            path_or_fileobj=fpath,
+                            path_in_repo=path_in_repo,
+                            repo_id=repo_id,
+                            repo_type=repo_type,
+                            commit_message="Upload asset",
+                        )
+            total_files += len(files)
+        finally:
+            shutil.rmtree(job_dir, ignore_errors=True)
+    log(f"[OK] Job {job_id} finished ({total_files} file(s))", quiet)
 
 
 def process_rclone_sync(job: dict, rclone_conf: str, dry_run: bool, quiet: bool) -> None:
