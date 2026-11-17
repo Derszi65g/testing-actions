@@ -21,9 +21,9 @@ def write_rclone_conf(tmp_dir: str) -> str:
     if not raw:
         return ""
     if "[" not in raw:
-        raw = base64.b64decode(raw).decode("utf-8")
+        raw = base64.b64decode("".join(raw.split())).decode("utf-8")
 
-    key_b64 = os.environ.get("RCLONE_KEY_B64", "").strip()
+    key_b64 = "".join(os.environ.get("RCLONE_KEY_B64", "").split())
     if key_b64:
         key_path = os.path.join(tmp_dir, "rprivate")
         with open(key_path, "wb") as kf:
@@ -286,41 +286,54 @@ def main() -> None:
     args = parser.parse_args()
 
     quiet = os.environ.get("QUIET_LOGS", "0") == "1"
+    stage = "init"
 
-    with tempfile.TemporaryDirectory(prefix="cw_") as tmp_dir:
-        rclone_conf = write_rclone_conf(tmp_dir)
-        cfg_path = args.config.strip()
+    try:
+        with tempfile.TemporaryDirectory(prefix="cw_") as tmp_dir:
+            stage = "write_rclone_conf"
+            rclone_conf = write_rclone_conf(tmp_dir)
+            cfg_path = args.config.strip()
 
-        if not cfg_path:
-            remote_cfg = os.environ.get("TASK_CONFIG_REMOTE", "").strip()
-            if not remote_cfg:
-                if args.dry_run:
-                    cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tasks.example.json")
+            if not cfg_path:
+                remote_cfg = os.environ.get("TASK_CONFIG_REMOTE", "").strip()
+                if not remote_cfg:
+                    if args.dry_run:
+                        cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tasks.example.json")
+                    else:
+                        raise RuntimeError("Set --config or TASK_CONFIG_REMOTE")
                 else:
-                    raise RuntimeError("Set --config or TASK_CONFIG_REMOTE")
-            else:
-                cfg_path = os.path.join(tmp_dir, "tasks.json")
-                cmd = ["rclone", "copyto", remote_cfg, cfg_path]
-                if rclone_conf:
-                    cmd.extend(["--config", rclone_conf])
-                run_cmd(cmd, quiet)
+                    stage = "fetch_remote_tasks"
+                    cfg_path = os.path.join(tmp_dir, "tasks.json")
+                    cmd = ["rclone", "copyto", remote_cfg, cfg_path]
+                    if rclone_conf:
+                        cmd.extend(["--config", rclone_conf])
+                    run_cmd(cmd, quiet)
 
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
+            stage = "parse_tasks"
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
 
-        jobs = manifest.get("jobs", [])
-        log(f"[INFO] Loaded {len(jobs)} job(s)", quiet)
+            jobs = manifest.get("jobs", [])
+            log(f"[INFO] Loaded {len(jobs)} job(s)", quiet)
 
-        for job in jobs:
-            jtype = job.get("type")
-            if jtype == "transfer":
-                process_transfer(job, rclone_conf, tmp_dir, args.dry_run, quiet)
-            elif jtype == "rclone_sync":
-                process_rclone_sync(job, rclone_conf, args.dry_run, quiet)
-            elif jtype == "run_remote_script":
-                process_remote_script(job, rclone_conf, tmp_dir, args.dry_run, quiet)
-            else:
-                raise ValueError(f"Unsupported job type: {jtype}")
+            for job in jobs:
+                jtype = job.get("type")
+                stage = f"job:{job.get('id', 'unknown')}:{jtype}"
+                if jtype == "transfer":
+                    process_transfer(job, rclone_conf, tmp_dir, args.dry_run, quiet)
+                elif jtype == "rclone_sync":
+                    process_rclone_sync(job, rclone_conf, args.dry_run, quiet)
+                elif jtype == "run_remote_script":
+                    process_remote_script(job, rclone_conf, tmp_dir, args.dry_run, quiet)
+                else:
+                    raise ValueError(f"Unsupported job type: {jtype}")
+    except subprocess.CalledProcessError as exc:
+        bin_name = os.path.basename(exc.cmd[0]) if exc.cmd else "cmd"
+        print(f"[ERROR] stage={stage} tool={bin_name} exit={exc.returncode}", flush=True)
+        raise SystemExit(1)
+    except Exception as exc:
+        print(f"[ERROR] stage={stage} type={type(exc).__name__}", flush=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

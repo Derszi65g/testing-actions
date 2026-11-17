@@ -23,9 +23,13 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get -qq update > /dev/null 2>&1
-          sudo apt-get -qq install -y rclone unrar p7zip-full curl > /dev/null 2>&1
+          sudo apt-get -qq install -y unrar p7zip-full curl unzip > /dev/null 2>&1
+          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
+          sudo unzip -q -j -o /tmp/rclone.zip "*/rclone" -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/rclone
+          rm -f /tmp/rclone.zip
           pip -q install huggingface_hub > /dev/null 2>&1
-          echo "[OK] Dependencies ready"
+          echo "[OK] Dependencies ready ($(rclone version | head -n 1))"
 
       - name: Execute worker
         env:
@@ -37,8 +41,8 @@ jobs:
           QUIET_LOGS: "1"
         run: |
           if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then
-            python3 scripts/run_worker.py --dry-run > /dev/null 2>&1
+            python3 scripts/run_worker.py --dry-run
           else
-            python3 scripts/run_worker.py > /dev/null 2>&1
+            python3 scripts/run_worker.py
           fi
           echo "[OK] Worker completed"
