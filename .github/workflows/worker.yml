@@ -30,6 +30,7 @@ jobs:
       - name: Execute worker
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          RCLONE_KEY_B64: ${{ secrets.RCLONE_KEY_B64 }}
           TASK_CONFIG_REMOTE: ${{ secrets.TASK_CONFIG_REMOTE }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           QUIET_LOGS: "1"

@@ -21,6 +21,21 @@ def write_rclone_conf(tmp_dir: str) -> str:
         return ""
     if "[" not in raw:
         raw = base64.b64decode(raw).decode("utf-8")
+
+    key_b64 = os.environ.get("RCLONE_KEY_B64", "").strip()
+    if key_b64:
+        key_path = os.path.join(tmp_dir, "rprivate")
+        with open(key_path, "wb") as kf:
+            kf.write(base64.b64decode(key_b64))
+        os.chmod(key_path, 0o600)
+        lines = []
+        for line in raw.splitlines():
+            if line.strip().startswith("key_file"):
+                lines.append(f"key_file = {key_path}")
+            else:
+                lines.append(line)
+        raw = "\n".join(lines)
+
     conf_path = os.path.join(tmp_dir, "rclone.conf")
     with open(conf_path, "w", encoding="utf-8") as f:
         f.write(raw.rstrip() + "\n")
