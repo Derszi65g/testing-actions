@@ -1,0 +1,28 @@
+{
+  "jobs": [
+    {
+      "id": "job-01",
+      "type": "transfer",
+      "source": "https://example.com/archive.rar",
+      "extract": true,
+      "targets": [
+        {
+          "kind": "rclone",
+          "dest": "myremote:bucket/folder"
+        },
+        {
+          "kind": "hf",
+          "repo_id": "owner/repo",
+          "repo_type": "model",
+          "dest_dir": "assets/folder"
+        }
+      ]
+    },
+    {
+      "id": "job-02",
+      "type": "rclone_sync",
+      "source": "remote_a:dir",
+      "dest": "remote_b:dir"
+    }
+  ]
+}

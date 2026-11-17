@@ -1,0 +1,42 @@
+name: Cloud Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Execution mode
+        required: true
+        default: run
+        type: choice
+        options:
+          - run
+          - dry-run
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get -qq update > /dev/null 2>&1
+          sudo apt-get -qq install -y rclone unrar p7zip-full curl > /dev/null 2>&1
+          pip -q install huggingface_hub > /dev/null 2>&1
+          echo "[OK] Dependencies ready"
+
+      - name: Execute worker
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          TASK_CONFIG_REMOTE: ${{ secrets.TASK_CONFIG_REMOTE }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          QUIET_LOGS: "1"
+        run: |
+          if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then
+            python3 scripts/run_worker.py --dry-run > /dev/null 2>&1
+          else
+            python3 scripts/run_worker.py > /dev/null 2>&1
+          fi
+          echo "[OK] Worker completed"

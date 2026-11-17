@@ -1,0 +1,7 @@
+.env
+rclone.conf
+tasks.json
+work/
+__pycache__/
+*.pyc
+*.log
