@@ -33,6 +33,7 @@ jobs:
           RCLONE_KEY_B64: ${{ secrets.RCLONE_KEY_B64 }}
           TASK_CONFIG_REMOTE: ${{ secrets.TASK_CONFIG_REMOTE }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          ARCHIVE_PASSWORD: ${{ secrets.ARCHIVE_PASSWORD }}
           QUIET_LOGS: "1"
         run: |
           if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then

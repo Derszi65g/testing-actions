@@ -53,16 +53,26 @@ def run_cmd(cmd: list[str], quiet: bool) -> None:
     subprocess.run(cmd, check=True, stdout=stdout, stderr=stderr)
 
 
-def extract_archives(raw_dir: str, out_dir: str, quiet: bool) -> list[str]:
+def extract_archives(raw_dir: str, out_dir: str, quiet: bool, password: str = "") -> list[str]:
     extracted = []
     for root, _, files in os.walk(raw_dir):
         for fn in sorted(files):
             fpath = os.path.join(root, fn)
             low = fn.lower()
             if low.endswith(".rar"):
-                run_cmd(["unrar", "x", "-o+", fpath, out_dir + "/"], quiet)
+                cmd = ["unrar", "x", "-o+"]
+                if password:
+                    cmd.append(f"-p{password}")
+                else:
+                    cmd.append("-p-")
+                cmd.extend([fpath, out_dir + "/"])
+                run_cmd(cmd, quiet)
             elif low.endswith((".zip", ".7z")):
-                run_cmd(["7z", "x", "-y", f"-o{out_dir}", fpath], quiet)
+                cmd = ["7z", "x", "-y"]
+                if password:
+                    cmd.append(f"-p{password}")
+                cmd.extend([f"-o{out_dir}", fpath])
+                run_cmd(cmd, quiet)
             else:
                 shutil.copy2(fpath, os.path.join(out_dir, fn))
 
@@ -76,6 +86,7 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
     job_id = job.get("id", "unknown")
     src = job["source"]
     extract = bool(job.get("extract", False))
+    password = str(job.get("password") or os.environ.get("ARCHIVE_PASSWORD", "")).strip()
     targets = job.get("targets", [])
 
     if dry_run:
@@ -98,7 +109,7 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
                 cmd.extend(["--config", rclone_conf])
             run_cmd(cmd, quiet)
 
-        files = extract_archives(raw_dir, out_dir, quiet) if extract else [
+        files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
             os.path.join(r, fn) for r, _, fs in os.walk(raw_dir) for fn in sorted(fs)
         ]
 
