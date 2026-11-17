@@ -15,7 +15,7 @@ on:
 jobs:
   worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 350
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +38,8 @@ jobs:
           TASK_CONFIG_REMOTE: ${{ secrets.TASK_CONFIG_REMOTE }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           ARCHIVE_PASSWORD: ${{ secrets.ARCHIVE_PASSWORD }}
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"
+          TQDM_DISABLE: "1"
           QUIET_LOGS: "1"
         run: |
           if [ "${{ github.event.inputs.mode }}" = "dry-run" ]; then

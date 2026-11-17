@@ -131,6 +131,42 @@ def list_rclone_files(remote_dir: str, rclone_conf: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+_HF_EXISTING_CACHE: dict[tuple[str, str], set[str]] = {}
+
+
+def get_hf_existing_files(api, repo_id: str, repo_type: str) -> set[str]:
+    key = (repo_id, repo_type)
+    if key not in _HF_EXISTING_CACHE:
+        try:
+            _HF_EXISTING_CACHE[key] = set(api.list_repo_files(repo_id=repo_id, repo_type=repo_type))
+        except Exception:
+            _HF_EXISTING_CACHE[key] = set()
+    return _HF_EXISTING_CACHE[key]
+
+
+def all_targets_already_have_file(targets: list[dict], rel_path: str) -> bool:
+    if not targets:
+        return False
+    token = os.environ.get("HF_TOKEN", "").strip()
+    if not token:
+        return False
+    for target in targets:
+        if target.get("kind") != "hf":
+            return False
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    norm_rel = rel_path.replace(os.sep, "/").lstrip("/")
+    for target in targets:
+        repo_id = target["repo_id"]
+        repo_type = target.get("repo_type", "model")
+        dest_dir = target.get("dest_dir", "").strip("/")
+        path_in_repo = f"{dest_dir}/{norm_rel}" if dest_dir else norm_rel
+        if path_in_repo not in get_hf_existing_files(api, repo_id, repo_type):
+            return False
+    return True
+
+
 def upload_to_targets(
     targets: list[dict],
     files: list[str],
@@ -150,14 +186,20 @@ def upload_to_targets(
             if not token:
                 raise RuntimeError("HF_TOKEN missing for hf target")
             from huggingface_hub import HfApi
+            from huggingface_hub.utils import disable_progress_bars
 
+            if quiet:
+                disable_progress_bars()
             api = HfApi(token=token)
             repo_id = target["repo_id"]
             repo_type = target.get("repo_type", "model")
             dest_dir = target.get("dest_dir", "").strip("/")
+            existing = get_hf_existing_files(api, repo_id, repo_type)
             for fpath in files:
                 rel = os.path.relpath(fpath, base_root).replace(os.sep, "/")
                 path_in_repo = f"{dest_dir}/{rel}" if dest_dir else rel
+                if path_in_repo in existing:
+                    continue
                 api.upload_file(
                     path_or_fileobj=fpath,
                     path_in_repo=path_in_repo,
@@ -165,6 +207,7 @@ def upload_to_targets(
                     repo_type=repo_type,
                     commit_message="Upload asset",
                 )
+                existing.add(path_in_repo)
 
 
 def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, quiet: bool) -> None:
@@ -223,6 +266,8 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
         # Process rclone source file-by-file to keep runner disk usage minimal
         remote_files = list_rclone_files(src, rclone_conf)
         for f_idx, rel_path in enumerate(remote_files, start=1):
+            if not extract and all_targets_already_have_file(targets, os.path.basename(rel_path)):
+                continue
             job_dir = os.path.join(work_dir, f"{job_id}_{s_idx}_{f_idx}")
             raw_dir = os.path.join(job_dir, "raw")
             out_dir = os.path.join(job_dir, "out")
