@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
 
 
 def log(msg: str, quiet: bool) -> None:
@@ -251,7 +252,7 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
             os.makedirs(raw_dir, exist_ok=True)
             os.makedirs(out_dir, exist_ok=True)
             try:
-                fname = src.split("?")[0].rstrip("/").split("/")[-1] or "payload.bin"
+                fname = urllib.parse.unquote(src.split("?")[0].rstrip("/").split("/")[-1]) or "payload.bin"
                 run_cmd(["curl", "-fsSL", "--retry", "3", "-o", os.path.join(raw_dir, fname), src], quiet)
                 base_root = out_dir if extract else raw_dir
                 files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
