@@ -52,9 +52,13 @@ def write_rclone_conf(tmp_dir: str) -> str:
 
 
 def run_cmd(cmd: list[str], quiet: bool) -> None:
-    stdout = subprocess.DEVNULL if quiet else None
-    stderr = subprocess.DEVNULL if quiet else None
-    subprocess.run(cmd, check=True, stdout=stdout, stderr=stderr)
+    if not quiet:
+        subprocess.run(cmd, check=True)
+        return
+    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0:
+        tail = "\n".join((res.stderr or "").splitlines()[-15:])
+        raise RuntimeError(f"Command failed (rc={res.returncode}): {cmd[0]}\n{tail}")
 
 
 def extract_archives(raw_dir: str, out_dir: str, quiet: bool, password: str = "") -> list[str]:
@@ -255,7 +259,11 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
             os.makedirs(raw_dir, exist_ok=True)
             os.makedirs(out_dir, exist_ok=True)
             try:
-                run_cmd(["curl", "-fsSL", "--retry", "3", "-o", os.path.join(raw_dir, fname), src], quiet)
+                run_cmd([
+                    "curl", "-fsSL", "-A", "Mozilla/5.0",
+                    "--retry", "5", "--retry-all-errors", "--connect-timeout", "20",
+                    "-C", "-", "-o", os.path.join(raw_dir, fname), src,
+                ], quiet)
                 base_root = out_dir if extract else raw_dir
                 files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
                     os.path.join(r, fn) for r, _, fs in os.walk(raw_dir) for fn in sorted(fs)
