@@ -246,13 +246,15 @@ def process_transfer(job: dict, rclone_conf: str, work_dir: str, dry_run: bool, 
             src = src_spec
 
         if src.startswith(("http://", "https://")):
+            fname = urllib.parse.unquote(src.split("?")[0].rstrip("/").split("/")[-1]) or "payload.bin"
+            if not extract and all_targets_already_have_file(targets, fname):
+                continue
             job_dir = os.path.join(work_dir, f"{job_id}_{s_idx}")
             raw_dir = os.path.join(job_dir, "raw")
             out_dir = os.path.join(job_dir, "out")
             os.makedirs(raw_dir, exist_ok=True)
             os.makedirs(out_dir, exist_ok=True)
             try:
-                fname = urllib.parse.unquote(src.split("?")[0].rstrip("/").split("/")[-1]) or "payload.bin"
                 run_cmd(["curl", "-fsSL", "--retry", "3", "-o", os.path.join(raw_dir, fname), src], quiet)
                 base_root = out_dir if extract else raw_dir
                 files = extract_archives(raw_dir, out_dir, quiet, password=password) if extract else [
